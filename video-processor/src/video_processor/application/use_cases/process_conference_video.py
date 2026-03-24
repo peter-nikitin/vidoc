@@ -1,10 +1,10 @@
 from uuid import uuid4
 
-from video_processor.domain.video import FilePath, ProcessingReport, VideoAsset
-from video_processor.ports.audio_extractor_port import AudioExtractorPort
-from video_processor.ports.report_builder_port import ReportBuilderPort
-from video_processor.ports.slides_change_port import SlideChangePort
-from video_processor.ports.speech_port import SpeechToTextPort
+from video_processor.domain.entities import FilePath, ProcessingReport, VideoAsset
+from video_processor.ports.audio import AudioExtractorPort
+from video_processor.ports.reporting import ReportBuilderPort
+from video_processor.ports.slides import SlideChangePort
+from video_processor.ports.speech import SpeechToTextPort
 
 
 class ProcessVideo:
@@ -21,15 +21,15 @@ class ProcessVideo:
         self._report_builder = report_builder
 
     def execute(self, video_path: FilePath) -> ProcessingReport:
-        videoAsset = VideoAsset(id=uuid4(), path=video_path)
-        audio = self._audio_extractor.extract_audio(video_path)
+        video = VideoAsset(id=uuid4(), path=video_path)
+        audio = self._audio_extractor.extract_audio(video)
         transcription = self._speech_to_text.transcribe(audio)
-        slides = self._keyframe_detector.recognize_slide_change(video_path)
+        slides = self._keyframe_detector.recognize_slide_change(video)
 
         report = self._report_builder.build_report(
             slides=slides, 
             transcriptions=transcription, 
-            video=videoAsset
+            video=video
         )
 
         return report

@@ -1,6 +1,7 @@
 from typing import Protocol
 
-from video_processor.domain.video import (
+from video_processor.domain.entities import (
+    FilePath,
     ProcessingReport,
     SlideChangedEvent,
     TranscriptionSegment,
@@ -15,3 +16,6 @@ class ReportBuilderPort(Protocol):
         transcriptions: list[TranscriptionSegment],
         slides: list[SlideChangedEvent],
     ) -> ProcessingReport: ...
+
+class ReportWriterPort(Protocol):
+    def write_report(self, report: ProcessingReport) -> FilePath: ...

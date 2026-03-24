@@ -20,6 +20,13 @@ class VideoAsset:
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, VideoAsset) and self.id == other.id
+    
+@dataclass(frozen=True)
+class AudioAsset:
+    path: FilePath
+    
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, AudioAsset) and self.path == other.path
 
 
 @dataclass(frozen=True)
