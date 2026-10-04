@@ -1,38 +1,40 @@
 # video-processor
 
-Python project scaffold for video processing work.
+Это ранний Python-каркас. Он создан до согласования [текущих продуктовых задач Vidoc](../docs/product.md) и пока не реализует первый этап. Перед развитием сервиса нужны отдельные спецификация и план реализации.
 
-## Dependency model
+## Зависимости
 
-Python does not usually use a direct `node_modules` equivalent in the project root.
+В Python нет точного аналога `node_modules` в корне проекта:
 
-- `pyproject.toml` is the project manifest and is the closest analogue to `package.json`
-- `.venv/` is the local virtual environment and is the practical analogue to a project-local dependency installation
-- dependencies are installed into `.venv/lib/...` instead of a flat `node_modules/`
+- `pyproject.toml` описывает проект и зависимости, подобно `package.json`;
+- `.venv/` — локальное виртуальное окружение;
+- пакеты устанавливаются внутрь `.venv/lib/...`.
 
-## Setup
+Для проекта нужен Python 3.11 или новее.
+
+## Подготовка окружения
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-## Run tests
+## Запуск тестов
 
 ```bash
 pytest
 ```
 
-## Dependency groups
+## Группы зависимостей
 
-- base: core runtime dependencies from `[project.dependencies]`
-- `speech`: local speech-to-text stack
-- `slides`: frame analysis and slide change detection
-- `dev`: everything needed for active development
+- основные: зависимости из `[project.dependencies]`;
+- `speech`: пакеты для локального распознавания речи;
+- `slides`: пакеты для анализа кадров, оставшиеся от прежнего направления проекта;
+- `dev`: зависимости для разработки.
 
-Examples:
+Примеры установки:
 
 ```bash
 python -m pip install -e .
@@ -41,6 +43,6 @@ python -m pip install -e ".[slides]"
 python -m pip install -e ".[dev]"
 ```
 
-## System dependency
+## Системная зависимость
 
-`ffmpeg` is required for audio extraction and frame sampling, but it is not installed through `pip`.
+Для извлечения аудио нужен `ffmpeg`; `pip` его не устанавливает. Наличие зависимости в каркасе не означает, что соответствующий адаптер уже реализован.
