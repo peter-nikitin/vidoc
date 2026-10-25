@@ -7,3 +7,4 @@
 Продуктовые задачи находятся в [`../product.md`](../product.md), термины — в [`../domain.md`](../domain.md), необязательные отложенные задачи — в [`../deferred.md`](../deferred.md).
 
 - [ADR 0001: Скачивание YouTube-видео на локальный Mac](0001-local-youtube-video-ingestion.md)
+- [ADR 0002: Локальный MVP распознавания речи](0002-local-transcription-mvp.md)
