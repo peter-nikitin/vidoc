@@ -5,34 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "video-processor"
 version = "0.1.0"
-description = "Video processing project scaffold."
+description = "Локальная расшифровка YouTube-видео."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "pydantic==2.11.3",
+  "yt-dlp[default]>=2026.10.21,<2027",
+  "faster-whisper>=1.2.1,<2",
+  # faster-whisper 1.2.1 передаёт metadata_errors, удалённый в PyAV 19.
+  "av>=11,<19",
 ]
 
+[project.scripts]
+vidoc = "video_processor.cli:main"
+
 [project.optional-dependencies]
-speech = [
-  "faster-whisper==1.1.1",
-]
-slides = [
-  "numpy==2.2.4",
-  "opencv-python-headless==4.11.0.86",
-  "scikit-image==0.25.2",
-]
 dev = [
-  "faster-whisper==1.1.1",
-  "numpy==2.2.4",
-  "opencv-python-headless==4.11.0.86",
-  "pytest==8.3.5",
-  "pytest-cov==6.0.0",
-  "ruff==0.11.2",
-  "scikit-image==0.25.2",
+  "pytest>=8.3.5,<10",
+  "ruff>=0.11.2,<1",
 ]
 test = [
-  "pytest==8.3.5",
-  "pytest-cov==6.0.0",
+  "pytest>=8.3.5,<10",
 ]
 
 [tool.setuptools]
