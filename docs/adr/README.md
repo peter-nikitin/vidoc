@@ -8,3 +8,4 @@
 
 - [ADR 0001: Скачивание YouTube-видео на локальный Mac](0001-local-youtube-video-ingestion.md)
 - [ADR 0002: Локальный MVP распознавания речи](0002-local-transcription-mvp.md)
+- [ADR 0003: Локальное распознавание через faster-whisper](0003-local-speech-engine.md)
