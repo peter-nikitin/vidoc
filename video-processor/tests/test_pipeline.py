@@ -118,6 +118,12 @@ def test_lazy_segments_failure_removes_wav(offline, monkeypatch):
     assert not list(offline.root.rglob("transcript.txt"))
 
 
+def test_ffmpeg_adapter_rejects_missing_executable(monkeypatch):
+    monkeypatch.setattr(ffmpeg.shutil, "which", lambda _: None)
+    with pytest.raises(RuntimeError, match="ffmpeg не найден. Установите: brew install ffmpeg"):
+        FfmpegAudioExtractor().check_available()
+
+
 def test_missing_ffmpeg_fails_before_download(offline, monkeypatch):
     def missing():
         raise RuntimeError("ffmpeg не найден. Установите: brew install ffmpeg")
