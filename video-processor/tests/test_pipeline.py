@@ -1,24 +1,30 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from video_processor import pipeline as p
+from video_processor.adapters import ffmpeg
+from video_processor.adapters.ffmpeg import FfmpegAudioExtractor
+from video_processor.adapters.whisper import WhisperSpeechRecognizer
+from video_processor.adapters.ytdlp import YtDlpDownloader
 from video_processor.cli import main
+from video_processor.ports import Segment, Transcription, VideoInfo
 
 URL = "https://www.youtube.com/watch?v=OdpcOLrxBnA&list=example"
-INFO = {"id": "OdpcOLrxBnA", "title": "Лекция / опасное: название", "live_status": "not_live"}
+INFO = VideoInfo("OdpcOLrxBnA", "Лекция / опасное: название", live_status="not_live")
 
 
 def test_safe_directories_and_distinct_ids(tmp_path):
     one = p.output_directory(tmp_path, INFO)
-    two = p.output_directory(tmp_path, {**INFO, "id": "abcdefghijk"})
+    two = p.output_directory(tmp_path, replace(INFO, id="abcdefghijk"))
     assert one.parent == tmp_path
     assert "Лекция" in one.name
     assert "/" not in one.name and ":" not in one.name
     assert one != two
-    assert len(p.output_directory(tmp_path, {**INFO, "title": "я" * 500}).name.encode()) < 256
+    assert len(p.output_directory(tmp_path, replace(INFO, title="я" * 500)).name.encode()) < 256
 
 
 @pytest.mark.parametrize(
@@ -29,10 +35,7 @@ def test_timestamps(seconds, expected):
 
 
 @pytest.fixture
-def offline(monkeypatch, tmp_path):
-    monkeypatch.setattr(p.shutil, "which", lambda name: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(p, "probe_video", lambda url: INFO.copy())
-
+def offline(tmp_path):
     def download(url, info, directory):
         video = directory / "video.mp4"
         video.write_bytes(b"video")
@@ -41,24 +44,35 @@ def offline(monkeypatch, tmp_path):
     def extract(video, wav):
         wav.write_bytes(b"audio")
 
-    monkeypatch.setattr(p, "download_video", download)
-    monkeypatch.setattr(p, "extract_audio", extract)
-    monkeypatch.setattr(
-        p,
-        "transcribe",
-        lambda wav: (iter([SimpleNamespace(start=65.1, end=70.8, text=" Привет! ")]), "ru"),
+    return SimpleNamespace(
+        root=tmp_path,
+        downloader=SimpleNamespace(probe=lambda url: INFO, download=download),
+        audio=SimpleNamespace(check_available=lambda: None, extract=extract),
+        recognizer=SimpleNamespace(
+            transcribe=lambda wav: Transcription([Segment(65.1, 70.8, " Привет! ")], "ru", "small")
+        ),
     )
-    return tmp_path
+
+
+def run_offline(offline, url=URL, **kwargs):
+    return p.run(
+        url,
+        artifacts_root=offline.root,
+        downloader=offline.downloader,
+        audio_extractor=offline.audio,
+        recognizer=offline.recognizer,
+        **kwargs,
+    )
 
 
 def test_pipeline_outputs_and_cleanup(offline):
-    directory = p.run(URL, artifacts_root=offline, report=lambda _: None)
+    directory = run_offline(offline, report=lambda _: None)
     assert (directory / "transcript.txt").read_text() == "[00:01:05 → 00:01:10] Привет!\n"
     metadata = json.loads((directory / "source.json").read_text())
     assert metadata == {
         "url": URL,
-        "youtube_id": INFO["id"],
-        "title": INFO["title"],
+        "youtube_id": INFO.id,
+        "title": INFO.title,
         "language": "ru",
         "model": "small",
     }
@@ -68,17 +82,22 @@ def test_pipeline_outputs_and_cleanup(offline):
 
 @pytest.mark.parametrize(
     "stage,function",
-    [("скачивание", "download_video"), ("аудио", "extract_audio"), ("распознавание", "transcribe")],
+    [("скачивание", "download"), ("аудио", "extract"), ("распознавание", "transcribe")],
 )
 def test_stage_errors_remove_stale_outputs_and_wav(offline, monkeypatch, stage, function):
-    directory = p.run(URL, artifacts_root=offline, report=lambda _: None)
+    directory = run_offline(offline, report=lambda _: None)
 
     def fail(*args):
         raise RuntimeError("external failure")
 
-    monkeypatch.setattr(p, function, fail)
+    target = {
+        "download": offline.downloader,
+        "extract": offline.audio,
+        "transcribe": offline.recognizer,
+    }
+    monkeypatch.setattr(target[function], function, fail)
     with pytest.raises(p.ProcessingError, match=stage):
-        p.run(URL, artifacts_root=offline, report=lambda _: None)
+        run_offline(offline, report=lambda _: None)
     assert not (directory / "transcript.txt").exists()
     assert not (directory / "source.json").exists()
     assert (directory / "video.mp4").exists()
@@ -90,53 +109,64 @@ def test_lazy_segments_failure_removes_wav(offline, monkeypatch):
         yield SimpleNamespace(start=0, end=1, text="first")
         raise RuntimeError("decode failure")
 
-    monkeypatch.setattr(p, "transcribe", lambda wav: (segments(), "en"))
+    monkeypatch.setattr(
+        offline.recognizer, "transcribe", lambda wav: Transcription(segments(), "en", "small")
+    )
     with pytest.raises(p.ProcessingError, match="распознавание"):
-        p.run(URL, artifacts_root=offline, report=lambda _: None)
-    assert not list(offline.rglob("*.wav"))
-    assert not list(offline.rglob("transcript.txt"))
+        run_offline(offline, report=lambda _: None)
+    assert not list(offline.root.rglob("*.wav"))
+    assert not list(offline.root.rglob("transcript.txt"))
+
+
+def test_ffmpeg_adapter_rejects_missing_executable(monkeypatch):
+    monkeypatch.setattr(ffmpeg.shutil, "which", lambda _: None)
+    with pytest.raises(RuntimeError, match="ffmpeg не найден. Установите: brew install ffmpeg"):
+        FfmpegAudioExtractor().check_available()
 
 
 def test_missing_ffmpeg_fails_before_download(offline, monkeypatch):
-    monkeypatch.setattr(p.shutil, "which", lambda _: None)
-    monkeypatch.setattr(p, "probe_video", lambda _: pytest.fail("network called"))
+    def missing():
+        raise RuntimeError("ffmpeg не найден. Установите: brew install ffmpeg")
+
+    monkeypatch.setattr(offline.audio, "check_available", missing)
+    monkeypatch.setattr(offline.downloader, "probe", lambda _: pytest.fail("network called"))
     with pytest.raises(p.ProcessingError, match="brew install ffmpeg"):
-        p.run(URL, artifacts_root=offline)
+        run_offline(offline)
 
 
 @pytest.mark.parametrize(
     "url", ["https://example.org/video", "https://youtube.com/playlist?list=x", "garbage"]
 )
 def test_invalid_url_rejected_before_network(offline, monkeypatch, url):
-    monkeypatch.setattr(p, "probe_video", lambda _: pytest.fail("network called"))
+    monkeypatch.setattr(offline.downloader, "probe", lambda _: pytest.fail("network called"))
     with pytest.raises(p.ProcessingError, match="ссылк"):
-        p.run(url, artifacts_root=offline)
+        run_offline(offline, url)
 
 
 @pytest.mark.parametrize(
-    "extra", [{"live_status": "is_live"}, {"live_status": "is_upcoming"}, {"_type": "playlist"}]
+    "extra", [{"live_status": "is_live"}, {"live_status": "is_upcoming"}, {"kind": "playlist"}]
 )
 def test_live_and_playlist_rejected(offline, monkeypatch, extra):
-    monkeypatch.setattr(p, "probe_video", lambda _: {**INFO, **extra})
+    monkeypatch.setattr(offline.downloader, "probe", lambda _: replace(INFO, **extra))
     with pytest.raises(p.ProcessingError):
-        p.run(URL, artifacts_root=offline)
+        run_offline(offline)
 
 
 def test_cli_exit_codes(monkeypatch, capsys, tmp_path):
     from video_processor import cli
 
-    monkeypatch.setattr(cli, "run", lambda url: tmp_path)
+    monkeypatch.setattr(cli, "run", lambda url, **kwargs: tmp_path)
     assert main([URL]) == 0
     assert str(tmp_path) in capsys.readouterr().out
 
-    def fail(url):
+    def fail(url, **kwargs):
         raise p.ProcessingError("скачивание", "offline")
 
     monkeypatch.setattr(cli, "run", fail)
     assert main([URL]) == 1
     assert "скачивание" in capsys.readouterr().err
 
-    def interrupt(url):
+    def interrupt(url, **kwargs):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "run", interrupt)
@@ -170,17 +200,17 @@ def test_download_does_not_reuse_partial_stream(tmp_path, monkeypatch, title):
             path = Path(self.options["outtmpl"] % {"ext": "mkv"})
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"complete video and audio")
-            return {**INFO, "ext": "mkv"}
+            return {"id": INFO.id, "title": INFO.title, "ext": "mkv"}
 
         def prepare_filename(self, result):
             return self.options["outtmpl"] % {"ext": result["ext"]}
 
     monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=Downloader))
-    video = p.download_video(URL, INFO, tmp_path)
+    video = YtDlpDownloader(tmp_path / ".yt-dlp-cache").download(URL, INFO, tmp_path)
     assert video.read_bytes() == b"complete video and audio"
     assert video.parent == tmp_path
     assert options_seen[0]["noplaylist"] is True
-    assert p.download_video(URL, INFO, tmp_path) == video
+    assert YtDlpDownloader(tmp_path / ".yt-dlp-cache").download(URL, INFO, tmp_path) == video
     assert len(options_seen) == 1
 
 
@@ -190,6 +220,7 @@ def test_probe_processes_only_watch_video(monkeypatch):
     class Downloader:
         def __init__(self, options):
             assert options["noplaylist"] is True
+            assert options["cachedir"] == "/cache"
 
         def __enter__(self):
             return self
@@ -199,10 +230,10 @@ def test_probe_processes_only_watch_video(monkeypatch):
 
         def extract_info(self, url, download):
             assert url == URL and download is False
-            return INFO
+            return {"id": INFO.id, "title": INFO.title, "live_status": INFO.live_status}
 
     monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=Downloader))
-    assert p.probe_video(URL) == INFO
+    assert YtDlpDownloader(Path("/cache")).probe(URL) == INFO
 
 
 def test_audio_contract_and_error(monkeypatch, tmp_path):
@@ -229,9 +260,9 @@ def test_audio_contract_and_error(monkeypatch, tmp_path):
         ]
         return SimpleNamespace(returncode=1, stderr="no audio stream")
 
-    monkeypatch.setattr(p.subprocess, "run", execute)
+    monkeypatch.setattr(ffmpeg.subprocess, "run", execute)
     with pytest.raises(RuntimeError, match="no audio stream"):
-        p.extract_audio(video, wav)
+        FfmpegAudioExtractor().extract(video, wav)
 
 
 def test_speech_uses_local_multilingual_cpu_model(monkeypatch, tmp_path):
@@ -241,15 +272,18 @@ def test_speech_uses_local_multilingual_cpu_model(monkeypatch, tmp_path):
         def __init__(self, name, **kwargs):
             assert name == "small"
             assert kwargs["device"] == "cpu" and kwargs["compute_type"] == "int8"
-            assert Path(kwargs["download_root"]).name == ".models"
+            assert Path(kwargs["download_root"]) == tmp_path / ".models"
 
         def transcribe(self, filename):
             assert filename == str(tmp_path / "audio.wav")
-            return iter([]), SimpleNamespace(language="ru")
+            segments = iter([SimpleNamespace(start=1, end=2, text="речь")])
+            return segments, SimpleNamespace(language="ru")
 
     monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=Model))
-    segments, language = p.transcribe(tmp_path / "audio.wav")
-    assert list(segments) == [] and language == "ru"
+    result = WhisperSpeechRecognizer(tmp_path / ".models").transcribe(tmp_path / "audio.wav")
+    assert list(result.segments) == [Segment(1, 2, "речь")]
+    assert result.language == "ru"
+    assert result.model == "small"
 
 
 def test_write_error_removes_partial_results(offline, monkeypatch):
@@ -262,22 +296,22 @@ def test_write_error_removes_partial_results(offline, monkeypatch):
 
     monkeypatch.setattr(Path, "replace", fail_source)
     with pytest.raises(p.ProcessingError, match="запись результата"):
-        p.run(URL, artifacts_root=offline, report=lambda _: None)
-    assert not list(offline.rglob("transcript.txt"))
-    assert not list(offline.rglob("source.json"))
-    assert not list(offline.rglob("*.tmp"))
-    assert not list(offline.rglob("*.wav"))
+        run_offline(offline, report=lambda _: None)
+    assert not list(offline.root.rglob("transcript.txt"))
+    assert not list(offline.root.rglob("source.json"))
+    assert not list(offline.root.rglob("*.tmp"))
+    assert not list(offline.root.rglob("*.wav"))
 
 
 def test_interrupt_cleans_working_audio(offline, monkeypatch):
     def interrupt(wav):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(p, "transcribe", interrupt)
+    monkeypatch.setattr(offline.recognizer, "transcribe", interrupt)
     with pytest.raises(KeyboardInterrupt):
-        p.run(URL, artifacts_root=offline, report=lambda _: None)
-    assert not list(offline.rglob("*.wav"))
-    assert not list(offline.rglob("transcript.txt"))
+        run_offline(offline, report=lambda _: None)
+    assert not list(offline.root.rglob("*.wav"))
+    assert not list(offline.root.rglob("transcript.txt"))
 
 
 def test_help_is_russian_and_does_not_load_model(monkeypatch, capsys):
