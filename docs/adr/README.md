@@ -10,3 +10,4 @@
 - [ADR 0002: Локальный MVP распознавания речи](0002-local-transcription-mvp.md)
 - [ADR 0003: Локальное распознавание через faster-whisper](0003-local-speech-engine.md)
 - [ADR 0004: Критерии качества верного источнику текста](0004-text-quality-criteria.md)
+- [ADR 0005: Сценарий процессора и адаптеры этапов](0005-processor-ports.md)
